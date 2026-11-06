@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+  <title>Nawigacja Cmentarna Wrocław v2.1</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    :root {
+      /* Przestrzeń barw CMYK:
+         Główna trasa: CMYK(100%, 50%, 0%, 0%)
+         Aktywna krawędź wejścia: CMYK(100%, 0%, 100%, 0%)
+         Punkt docelowy grobu: CMYK(0%, 100%, 100%, 0%)
+         Wektor rzędów wewnątrz pola: CMYK(0%, 20%, 100%, 0%) */
+      --primary: #0080ff;
+      --edge-active: #00e600;
+      --edge-warn: #ff0000;
+      --row-vector: #ffcc00;
+      --bg-dark: #12161f;
+      --card-bg: #1b2230;
+      --text-light: #f0f4f8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { display: flex; flex-direction: column; height: 100dvh; background: var(--bg-dark); color: var(--text-light); overflow: hidden; }
+    
+    #top-panel {
+      padding: 10px 12px;
+      background: var(--card-bg);
+      box-shadow: 0 4px 14px rgba(0,0,0,0.6);
+      z-index: 1000;
+      max-height: 48dvh;
+      overflow-y: auto;
+    }
+    h1 { font-size: 0.96rem; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+    .badge { font-size: 0.72rem; background: var(--primary); padding: 3px 8px; border-radius: 12px; font-weight: 600; }
+    
+    .row-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 6px; }
+    .row-grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 6px; }
+    .full-row { margin-bottom: 6px; }
+    label { display: block; font-size: 0.72rem; opacity: 0.85; margin-bottom: 2px; }
+    input, select, button {
+      width: 100%; padding: 8px 9px; border-radius: 6px; border: 1px solid #364156;
+      background: #0e121a; color: #fff; font-size: 0.85rem;
+    }
+    button { background: var(--primary); border: none; font-weight: 600; cursor: pointer; }
+    button.secondary { background: #2b3548; }
+    button.share-btn { background: #15803d; }
+    
+    #instruction-banner {
+      display: none; margin-top: 6px; padding: 9px 10px; border-radius: 6px;
+      background: #0f291a; border-left: 4px solid var(--edge-active);
+      font-size: 0.81rem; line-height: 1.38;
+    }
+    #tap-prompt {
+      display: none; margin-top: 6px; padding: 9px 10px; border-radius: 6px;
+      background: #3b2308; border-left: 4px solid var(--row-vector);
+      font-size: 0.82rem; line-height: 1.38;
+    }
+    #map { flex: 1; width: 100%; }
+    .legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: 0.7rem; margin-top: 6px; opacity: 0.9; }
+    .legend span { display: inline-flex; align-items: center; gap: 4px; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  </style>
+</head>
+<body>
+
+<div id="top-panel">
+  <h1>
+    <span>Nawigacja Cmentarna v2.1</span>
+    <span class="badge" id="status-badge">Gotowy</span>
+  </h1>
+
+  <div class="row-grid">
+    <div>
+      <label>1. Cmentarz:</label>
+      <select id="cemetery-select" onchange="onCemeteryChange()">
+        <option value="osobowice">Osobowicki (ul. Osobowicka)</option>
+        <option value="grabiszyn">Grabiszyński (ul. Grabiszyńska)</option>
+        <option value="psiepole">Psie Pole (ul. Kiełczowska)</option>
+        <option value="jerzmanowo">Jerzmanowo</option>
+        <option value="pawlowice">Pawłowice</option>
+        <option value="lesnica">Leśnica</option>
+      </select>
+    </div>
+    <div>
+      <label>Wyszukiwarka CUI Wrocław:</label>
+      <button type="button" class="secondary" onclick="window.open('https://groby.cui.wroclaw.pl/', '_blank')">
+        🔍 Otwórz CUI ↗
+      </button>
+    </div>
+  </div>
+
+  <div class="full-row">
+    <label>2. Wklej wynik „Pole/Grób/Rząd” z CUI (lub wpisz ręcznie):</label>
+    <div style="display:flex; gap:6px;">
+      <input type="text" id="cui-input" placeholder="np. 51/309/13 ( 12 od pola 49 )" value="51/309/13 ( 12 od pola 49 )" />
+      <button type="button" style="width:auto; white-space:nowrap; padding: 8px 14px;" onclick="calculateCompleteNavigation()">
+        Wyznacz trasę
+      </button>
+    </div>
+  </div>
+
+  <div class="row-grid-3">
+    <button type="button" class="secondary" onclick="useMyGPS()">📍 Mój GPS</button>
+    <button type="button" class="secondary" onclick="startManualTapMode()">👆 Wskaż pole</button>
+    <button type="button" class="share-btn" onclick="shareRouteForMom()">📲 Wyślij Mamie</button>
+  </div>
+
+  <div id="tap-prompt"></div>
+  <div id="instruction-banner"></div>
+
+  <div class="legend">
+    <span><i class="dot" style="background:#0080ff"></i> Trasa po alejkach</span>
+    <span><i class="dot" style="background:#00e600"></i> Od tej strony licz rzędy</span>
+    <span><i class="dot" style="background:#ffcc00"></i> Kierunek rzędów</span>
+  </div>
+</div>
+
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
+
+<script>
+  const CEMETERIES = {
+    osobowice: { name: "Cmentarz Osobowicki", gate: [51.14815, 17.00180], bbox: [51.1450, 16.9850, 51.1580, 17.0120] },
+    grabiszyn: { name: "Cmentarz Grabiszyński", gate: [51.09236, 16.97352], bbox: [51.0840, 16.9600, 51.0955, 16.9800] },
+    psiepole:  { name: "Cmentarz Psie Pole", gate: [51.14190, 17.13620], bbox: [51.1380, 17.1300, 51.1460, 17.1450] },
+    jerzmanowo:{ name: "Cmentarz Jerzmanowo", gate: [51.11950, 16.86690], bbox: [51.1160, 16.8620, 51.1230, 16.8720] },
+    pawlowice: { name: "Cmentarz Pawłowice", gate: [51.17420, 17.11800], bbox: [51.1720, 17.1140, 51.1770, 17.1220] },
+    lesnica:   { name: "Cmentarz Leśnica", gate: [51.14860, 16.86210], bbox: [51.1460, 16.8580, 51.1510, 16.8660] }
+  };
+
+  let map, userMarker, routeLayer, guidanceLayer;
+  let currentStartCoords = null;
+  let currentEntryCoords = null;
+  let osmPathGraph = { nodes: {}, adj: {} };
+  let cemeteryFields = {};
+  let tapModeStep = 0;
+  let pendingParsedQuery = null;
+  let gpsWatchId = null;
+
+  function createBoxPolygonAroundPoint(lat, lng, halfLat = 0.00022, halfLng = 0.00034) {
+    const minLng = lng - halfLng, maxLng = lng + halfLng;
+    const minLat = lat - halfLat, maxLat = lat + halfLat;
+    return turf.polygon([[
+      [minLng, minLat], [maxLng, minLat], [maxLng, maxLat], [minLng, maxLat], [minLng, minLat]
+    ]]);
+  }
+
+  // Gwarantowane współrzędne kwater dostępnych natychmiast (bez czekania na Overpass API)
+  function injectPresetFields(cemKey) {
+    if (cemKey === "osobowice") {
+      const osoPresets = {
+        "49": [51.15105, 16.99640],
+        "50": [51.15105, 16.99550],
+        "51": [51.15165, 16.99640],
+        "52": [51.15165, 16.99550],
+        "53": [51.15225, 16.99640],
+        "37": [51.15020, 16.99820],
+        "43A":[51.15070, 16.99740],
+        "5":  [51.14890, 17.00050]
+      };
+      for (const [id, [lat, lng]] of Object.entries(osoPresets)) {
+        if (!cemeteryFields[id]) cemeteryFields[id] = createBoxPolygonAroundPoint(lat, lng);
+      }
+    } else {
+      const grabPresets = {
+        "49": [51.0896, 16.9687],
+        "51": [51.0887, 16.9687],
+        "37": [51.0889, 16.9708],
+        "37U":[51.0889, 16.9718],
+        "43A":[51.0879, 16.9708],
+        "5":  [51.0912, 16.9736]
+      };
+      for (const [id, [lat, lng]] of Object.entries(grabPresets)) {
+        if (!cemeteryFields[id]) cemeteryFields[id] = createBoxPolygonAroundPoint(lat, lng);
+      }
+    }
+    loadSavedCustomFields();
+  }
+
+  function initMap() {
+    const cemKey = document.getElementById('cemetery-select').value;
+    const defaultCem = CEMETERIES[cemKey];
+    currentStartCoords = [...defaultCem.gate];
+
+    map = L.map('map').setView(defaultCem.gate, 16);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 20,
+      attribution: '© OpenStreetMap'
+    }).addTo(map);
+
+    routeLayer = L.layerGroup().addTo(map);
+    guidanceLayer = L.layerGroup().addTo(map);
+
+    userMarker = L.marker(currentStartCoords, { draggable: true })
+      .addTo(map)
+      .bindPopup("<b>Punkt startowy (Brama / Ty)</b><br>Przeciągnij mnie lub kliknij '📍 Mój GPS'.");
+
+    userMarker.on('dragend', (e) => {
+      const pos = e.target.getLatLng();
+      currentStartCoords = [pos.lat, pos.lng];
+      if (currentEntryCoords) recomputePathOnly();
+    });
+
+    map.on('click', onMapTap);
+
+    injectPresetFields(cemKey);
+    checkUrlParametersForSharedRoute();
+    loadCemeteryData();
+  }
+
+  function setStatus(text) {
+    document.getElementById('status-badge').innerText = text;
+  }
+
+  function onCemeteryChange() {
+    const key = document.getElementById('cemetery-select').value;
+    const cem = CEMETERIES[key];
+    currentStartCoords = [...cem.gate];
+    currentEntryCoords = null;
+    userMarker.setLatLng(currentStartCoords);
+    map.setView(cem.gate, 16);
+    document.getElementById('tap-prompt').style.display = "none";
+    document.getElementById('instruction-banner').style.display = "none";
+    loadCemeteryData();
+  }
+
+  function loadSavedCustomFields() {
+    const cemKey = document.getElementById('cemetery-select').value;
+    try {
+      const saved = JSON.parse(localStorage.getItem('wroclaw_fields_' + cemKey) || '{}');
+      for (const [k, poly] of Object.entries(saved)) {
+        cemeteryFields[k] = poly;
+      }
+    } catch (e) {}
+  }
+
+  function saveCustomField(fieldId, poly) {
+    const cemKey = document.getElementById('cemetery-select').value;
+    cemeteryFields[fieldId] = poly;
+    try {
+      const saved = JSON.parse(localStorage.getItem('wroclaw_fields_' + cemKey) || '{}');
+      saved[fieldId] = poly;
+      localStorage.setItem('wroclaw_fields_' + cemKey, JSON.stringify(saved));
+    } catch (e) {}
+  }
+
+  async function loadCemeteryData() {
+    const key = document.getElementById('cemetery-select').value;
+    const cem = CEMETERIES[key];
+
+    routeLayer.clearLayers();
+    guidanceLayer.clearLayers();
+    osmPathGraph = { nodes: {}, adj: {} };
+    cemeteryFields = {};
+    injectPresetFields(key);
+
+    setStatus("Ładowanie alejek...");
+
+    const [s, w, n, e] = cem.bbox;
+    const query = `
+      [out:json][timeout:25];
+      (
+        way["highway"](${s},${w},${n},${e});
+        way["ref"](${s},${w},${n},${e});
+        way["name"](${s},${w},${n},${e});
+        node["ref"](${s},${w},${n},${e});
+        node["name"](${s},${w},${n},${e});
+      );
+      out body;
+      >;
+      out skel qt;
+    `;
+
+    try {
+      const res = await fetch("https://overpass-api.de/api/interpreter", { method: "POST", body: query });
+      const data = await res.json();
+      buildGraphAndFieldsFromOSM(data, key);
+      setStatus("Gotowy (Alejki OK)");
+      if (currentEntryCoords) recomputePathOnly();
+    } catch (err) {
+      setStatus("Gotowy (Tryb szybki)");
+    }
+  }
+
+  function normalizeFieldName(rawName) {
+    return String(rawName || "")
+      .replace(/^(pole|kwatera|sektor|p\.)\s*/i, "")
+      .trim()
+      .toUpperCase();
+  }
+
+  function buildGraphAndFieldsFromOSM(osmData, cemKey) {
+    const nodesMap = {};
+    osmData.elements.forEach(el => {
+      if (el.type === "node") {
+        nodesMap[el.id] = [el.lat, el.lon];
+        if (el.tags && (el.tags.ref || el.tags.name)) {
+          const fId = normalizeFieldName(el.tags.ref || el.tags.name);
+          if (fId && fId.length <= 5) {
+            cemeteryFields[fId] = createBoxPolygonAroundPoint(el.lat, el.lon);
+          }
+        }
+      }
+    });
+
+    osmData.elements.forEach(el => {
+      if (el.type === "way" && el.nodes && el.nodes.length > 1) {
+        const tags = el.tags || {};
+        if (tags.highway) {
+          for (let i = 0; i < el.nodes.length - 1; i++) {
+            const nA = el.nodes[i], nB = el.nodes[i + 1];
+            const cA = nodesMap[nA], cB = nodesMap[nB];
+            if (!cA || !cB) continue;
+            osmPathGraph.nodes[nA] = cA;
+            osmPathGraph.nodes[nB] = cB;
+            const d = turf.distance(turf.point([cA[1], cA[0]]), turf.point([cB[1], cB[0]]), { units: 'meters' });
+            if (!osmPathGraph.adj[nA]) osmPathGraph.adj[nA] = [];
+            if (!osmPathGraph.adj[nB]) osmPathGraph.adj[nB] = [];
+            osmPathGraph.adj[nA].push({ to: nB, weight: d });
+            osmPathGraph.adj[nB].push({ to: nA, weight: d });
+          }
+        }
+
+        const sectorRef = normalizeFieldName(tags.ref || tags.name);
+        if (sectorRef && sectorRef.length <= 5 && !tags.highway) {
+          const pts = el.nodes.map(id => nodesMap[id]).filter(Boolean);
+          if (pts.length >= 3) {
+            const ring = pts.map(c => [c[1], c[0]]);
+            ring.push(ring[0]);
+            cemeteryFields[sectorRef] = turf.polygon([ring]);
+          }
+        }
+      }
+    });
+
+    injectPresetFields(cemKey);
+  }
+
+  function parseCuiString(raw) {
+    const clean = raw.replace(/Pole\/Grób\/Rząd:\s*/i, "").trim();
+    const fullRegex = /^([A-Z0-9]+)\s*\/\s*(\d+)\s*\/\s*(\d+)(?:\s*\(\s*(\d+)\s*od\s*(?:pola|p\.)?\s*([A-Z0-9]+)\s*\))?/i;
+    const m = clean.match(fullRegex);
+    if (m) {
+      return {
+        targetField: m[1].toUpperCase(),
+        grave: parseInt(m[2], 10),
+        row: parseInt(m[3], 10),
+        countFromRef: m[4] ? parseInt(m[4], 10) : parseInt(m[3], 10),
+        refField: m[5] ? m[5].toUpperCase() : null
+      };
+    }
+    const shortRegex = /^([A-Z0-9]+)(?:\s+od\s+([A-Z0-9]+))?/i;
+    const sm = clean.match(shortRegex);
+    if (sm) {
+      return {
+        targetField: sm[1].toUpperCase(),
+        grave: 1, row: 1, countFromRef: 1,
+        refField: sm[2] ? sm[2].toUpperCase() : null
+      };
+    }
+    return null;
+  }
+
+  function startManualTapMode(parsedObj) {
+    pendingParsedQuery = parsedObj || parseCuiString(document.getElementById('cui-input').value) || {
+      targetField: "DOCELOWE", grave: 1, row: 1, countFromRef: 1, refField: "SĄSIEDNIE"
+    };
+    tapModeStep = 1;
+    const promptBox = document.getElementById('tap-prompt');
+    promptBox.style.display = "block";
+    promptBox.innerHTML =
+      `👆 <b>Wskaż na mapie (Krok 1/2):</b> Przybliż mapę (numery kwater są podpisane) i <b>dotknij palcem środek Pola ${pendingParsedQuery.targetField}</b>.`;
+  }
+
+  function onMapTap(e) {
+    if (tapModeStep === 0) return;
+    const { lat, lng } = e.latlng;
+    const promptBox = document.getElementById('tap-prompt');
+
+    if (tapModeStep === 1) {
+      const poly = createBoxPolygonAroundPoint(lat, lng);
+      saveCustomField(pendingParsedQuery.targetField, poly);
+
+      tapModeStep = 2;
+      if (pendingParsedQuery.refField) {
+        promptBox.innerHTML =
+          `👆 <b>Krok 2/2:</b> Teraz <b>dotknij sąsiednie Pole ${pendingParsedQuery.refField}</b> (od którego CUI każe liczyć rzędy).`;
+      } else {
+        pendingParsedQuery.refField = "WEJSCIE_" + pendingParsedQuery.targetField;
+        promptBox.innerHTML =
+          `👆 <b>Krok 2/2:</b> Teraz <b>dotknij alejkę przed tym polem</b>, od której chcesz wejść i liczyć rzędy.`;
+      }
+    } else if (tapModeStep === 2) {
+      const refPoly = createBoxPolygonAroundPoint(lat, lng, 0.00012, 0.00018);
+      saveCustomField(pendingParsedQuery.refField, refPoly);
+      tapModeStep = 0;
+      promptBox.style.display = "none";
+      renderNavigationForParsed(pendingParsedQuery);
+    }
+  }
+
+  function calculateCompleteNavigation() {
+    const parsed = parseCuiString(document.getElementById('cui-input').value);
+    if (!parsed) {
+      alert("Wpisz lokalizację z CUI, np.: 51/309/13 ( 12 od pola 49 )");
+      return;
+    }
+
+    if (!cemeteryFields[parsed.targetField] || (parsed.refField && !cemeteryFields[parsed.refField])) {
+      startManualTapMode(parsed);
+      return;
+    }
+
+    document.getElementById('tap-prompt').style.display = "none";
+    renderNavigationForParsed(parsed);
+  }
+
+  function renderNavigationForParsed(parsed) {
+    routeLayer.clearLayers();
+    guidanceLayer.clearLayers();
+
+    const targetPoly = cemeteryFields[parsed.targetField];
+    L.geoJSON(targetPoly, {
+      style: { color: "#0080ff", weight: 2, fillOpacity: 0.22 }
+    }).bindPopup(`<b>Pole ${parsed.targetField}</b>`).addTo(guidanceLayer);
+
+    const ring = targetPoly.geometry.coordinates[0];
+    let bestEdge = [ring[0], ring[1]];
+
+    if (parsed.refField && cemeteryFields[parsed.refField]) {
+      const refPoly = cemeteryFields[parsed.refField];
+      const refCenter = turf.centroid(refPoly);
+
+      L.geoJSON(refPoly, {
+        style: { color: "#999999", weight: 2, dashArray: "4,4", fillOpacity: 0.1 }
+      }).bindPopup(`<b>Pole odniesienia: ${parsed.refField}</b>`).addTo(guidanceLayer);
+
+      let minEdgeDist = Infinity;
+      for (let i = 0; i < ring.length - 1; i++) {
+        const edgeMid = turf.midpoint(turf.point(ring[i]), turf.point(ring[i + 1]));
+        const d = turf.distance(edgeMid, refCenter, { units: 'meters' });
+        if (d < minEdgeDist) {
+          minEdgeDist = d;
+          bestEdge = [ring[i], ring[i + 1]];
+        }
+      }
+    }
+
+    const entryMidPoint = turf.midpoint(turf.point(bestEdge[0]), turf.point(bestEdge[1]));
+    const entryLat = entryMidPoint.geometry.coordinates[1];
+    const entryLng = entryMidPoint.geometry.coordinates[0];
+    currentEntryCoords = [entryLat, entryLng];
+
+    // Aktywna krawędź wejścia: CMYK(100%, 0%, 100%, 0%)
+    L.polyline([[bestEdge[0][1], bestEdge[0][0]], [bestEdge[1][1], bestEdge[1][0]]], {
+      color: "#00e600", weight: 8, opacity: 0.95
+    }).bindPopup(`<b>WEJDŹ TUTAJ</b><br>Zacznij liczyć rzędy od tej linii!`).addTo(guidanceLayer);
+
+    const targetCenter = turf.centroid(targetPoly);
+    const ratio = Math.min(0.85, Math.max(0.2, (parsed.countFromRef || parsed.row) / 22));
+    const graveLat = entryLat + (targetCenter.geometry.coordinates[1] - entryLat) * (ratio * 1.5);
+    const graveLng = entryLng + (targetCenter.geometry.coordinates[0] - entryLng) * (ratio * 1.5);
+
+    L.polyline([[entryLat, entryLng], [graveLat, graveLng]], {
+      color: "#ffcc00", weight: 4, dashArray: "6, 6"
+    }).addTo(guidanceLayer);
+
+    L.circleMarker([graveLat, graveLng], {
+      radius: 8, color: "#ffcc00", fillColor: "#ff0000", fillOpacity: 1
+    }).bindPopup(
+      `<b>Grób nr ${parsed.grave} (Rząd ${parsed.row})</b><br>` +
+      `Odlicz <b>${parsed.countFromRef} rzędów</b> od zaznaczonej krawędzi.`
+    ).addTo(guidanceLayer).openPopup();
+
+    recomputePathOnly();
+
+    const banner = document.getElementById('instruction-banner');
+    banner.style.display = "block";
+    banner.innerHTML =
+      `✅ <b>Trasa wyznaczona:</b> Idź alejką do zaznaczonej krawędzi <b>Pola ${parsed.targetField}</b>` +
+      (parsed.refField ? ` (od strony <b>Pola ${parsed.refField}</b>). ` : `. `) +
+      `Wejdź w kwaterę i <b>odlicz ${parsed.countFromRef} rzędów na wprost</b> (grób nr <b>${parsed.grave}</b>).`;
+  }
+
+  function recomputePathOnly() {
+    if (!currentEntryCoords) return;
+    routeLayer.clearLayers();
+    const pathCoords = findShortestPathOnPaths(
+      currentStartCoords[0], currentStartCoords[1],
+      currentEntryCoords[0], currentEntryCoords[1]
+    );
+    const routeLine = L.polyline(pathCoords, { color: "#0080ff", weight: 5 }).addTo(routeLayer);
+    map.fitBounds(routeLine.getBounds(), { padding: [45, 45] });
+  }
+
+  function findNearestGraphNode(lat, lng) {
+    let bestId = null, minDist = Infinity;
+    const pt = turf.point([lng, lat]);
+    for (const [id, coord] of Object.entries(osmPathGraph.nodes)) {
+      const d = turf.distance(pt, turf.point([coord[1], coord[0]]), { units: 'meters' });
+      if (d < minDist) { minDist = d; bestId = id; }
+    }
+    return bestId;
+  }
+
+  function findShortestPathOnPaths(sLat, sLng, eLat, eLng) {
+    const startNode = findNearestGraphNode(sLat, sLng);
+    const endNode = 
